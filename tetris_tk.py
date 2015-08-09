@@ -1,537 +1,570 @@
-#!/usr/bin/env python
-"""
-Tetris Tk - A tetris clone written in Python using the Tkinter GUI library.
+###############################################################################
+## an implementation of a ***very*** basic tetris game in python using pygame
+###############################################################################
+'''rotate --- r
+   pause ---- p
+   direction buttons for movement'''
 
-Controls:
-    Left Arrow      Move left
-    Right Arrow     Move right
-    Down Arrow      Move down
-    Up Arrow        Drop Tetronimoe to the bottom
-    'a'             Rotate anti-clockwise (to the left)
-    'b'             Rotate clockwise (to the right)
-    'p'             Pause the game.
-"""
-
-from Tkinter import *
-from time import sleep
-from random import randint
-import tkMessageBox
 import sys
+import copy
+import pygame
+import random
 
-SCALE = 20
-OFFSET = 3
-MAXX = 10
-MAXY = 22
+size = width, height = 200, 400
+sqrsize, pen_size = 20, 1
+occupied_squares = []
+top_of_screen = (0, 0)
+color = {'white':(255, 255, 255)}
+top_x, top_y = top_of_screen[0], top_of_screen[1]
 
-NO_OF_LEVELS = 10
+pygame.init()
+screen = pygame.display.set_mode(size)
+background = pygame.Surface(screen.get_size())
+background = background.convert()
+background.fill((color['white']))
+screen.blit(background, top_of_screen)
+pygame.display.flip()
 
-LEFT = "left"
-RIGHT = "right"
-DOWN = "down"
-
-direction_d = { "left": (-1, 0), "right": (1, 0), "down": (0, 1) }
-
-def level_thresholds( first_level, no_of_levels ):
-    """
-    Calculates the score at which the level will change, for n levels.
-    """
-    thresholds =[]
-    for x in xrange( no_of_levels ):
-        multiplier = 2**x
-        thresholds.append( first_level * multiplier )
-    
-    return thresholds
-
-class status_bar( Frame ):
-    """
-    Status bar to display the score and level
-    """
-    def __init__(self, parent):
-        Frame.__init__( self, parent )
-        self.label = Label( self, bd=1, relief=SUNKEN, anchor=W )
-        self.label.pack( fill=X )
-        
-    def set( self, format, *args):
-        self.label.config( text = format % args)
-        self.label.update_idletasks()
-        
-    def clear( self ):
-        self.label.config(test="")
-        self.label.update_idletasks()
-
-class Board( Frame ):
-    """
-    The board represents the tetris playing area. A grid of x by y blocks.
-    """
-    def __init__(self, parent, scale=20, max_x=10, max_y=20, offset=3):
-        """
-        Init and config the tetris board, default configuration:
-        Scale (block size in pixels) = 20
-        max X (in blocks) = 10
-        max Y (in blocks) = 20
-        offset (in pixels) = 3
-        """
-        Frame.__init__(self, parent)
-        
-        # blocks are indexed by there corrdinates e.g. (4,5), these are
-        self.landed = {}
-        self.parent = parent
-        self.scale = scale
-        self.max_x = max_x
-        self.max_y = max_y
-        self.offset = offset        
-
-        self.canvas = Canvas(parent,
-                             height=(max_y * scale)+offset,
-                             width= (max_x * scale)+offset)
-        self.canvas.pack()
-
-    def check_for_complete_row( self, blocks ):
-        """
-        Look for a complete row of blocks, from the bottom up until the top row
-        or until an empty row is reached.
-        """
-        rows_deleted = 0
-        
-        # Add the blocks to those in the grid that have already 'landed'
-        for block in blocks:
-            self.landed[ block.coord() ] = block.id
-        
-        empty_row = 0
-
-        # find the first empty row
-        for y in xrange(self.max_y -1, -1, -1):
-            row_is_empty = True
-            for x in xrange(self.max_x):
-                if self.landed.get((x,y), None):
-                    row_is_empty = False
-                    break;
-            if row_is_empty:
-                empty_row = y
-                break
-
-        # Now scan up and until a complete row is found. 
-        y = self.max_y - 1
-        while y > empty_row:
+################################################################################
+#constructors and selectors for a tetrominoe shape
+################################################################################
+def make_tetrominoe(block1, block2, block3, block4, name):
+    """Inputs<- 4 constituent blocks that make up a tetrominoe shape and name
+       of tetrominoe shape.
+       this returns a tetrominoe shape."""
+    return [block1, block2, block3, block4, name]
  
-            complete_row = True
-            for x in xrange(self.max_x):
-                if self.landed.get((x,y), None) is None:
-                    complete_row = False
-                    break;
+def get_tetname(tetrominoe):
+    """returns the name of a tetrominoe shape"""
+    return tetrominoe[4]
+    
+def get_blocks(tetrominoe):
+    """returns a list of blocks that make up a tetrominoe piece"""
+    return tetrominoe[:4]
+    
+def get_refblock(tetrominoe):
+    """gets reference block.Reference block is one around which other
+    blocks are drawn"""
+    return tetrominoe[3]
 
-            if complete_row:
-                rows_deleted += 1
-                
-                #delete the completed row
-                for x in xrange(self.max_x):
-                    block = self.landed.pop((x,y))
-                    self.delete_block(block)
-                    del block
+def block_points(tetronimoe):
+    """gets the coordinates of the individual blocks that make up a tetrominoe
+    piece"""
+    blocks = get_blocks(tetronimoe) 
+    return [get_point(block) for block in blocks]
+    
+    
+###############################################################################
+#constructors and selectors for a tetrominoe shape block
+###############################################################################
+def make_block(point, breadth, length):
+    """This returns a block. A block is one of the constituent parts of a
+    tetrominoe shape and is made up of a start coordinate,the breadth of the
+    block and the lenght"""
+    return [point, breadth, length]
 
-                    
-                # move all the rows above it down
-                for ay in xrange(y-1, empty_row, -1):
-                    for x in xrange(self.max_x):
-                        block = self.landed.get((x,ay), None)
-                        if block:
-                            block = self.landed.pop((x,ay))
-                            dx,dy = direction_d[DOWN]
-                            
-                            self.move_block(block, direction_d[DOWN])
-                            self.landed[(x+dx, ay+dy)] = block
+def get_point(a_block):
+    """returns the coordinate start point of block"""
+    return a_block[0]
 
-                # move the empty row down index down too
-                empty_row +=1
-                # y stays same as row above has moved down.
-                
-            else:
-                y -= 1
-                
-        #self.output() # non-gui diagnostic
+def block_width(a_block):
+    """Returns the width of a block"""
+    return a_block[1]
+    
+def block_height(a_block):
+    """Returns the height of a block"""
+    return a_block[2]
+
+
+#############################################################################    
+#constructors and selectors for coordinate points
+##############################################################################
+def make_point(x_coord, y_coord, colour):
+    """Input<-coordinate of a point, color
+       returns a point object with the coordinates of the point and color"""
+    return [x_coord, y_coord, colour]
+    
+def point_x(a_point):
+    """Returns the xcoordinate of a point structure"""
+    return a_point[0]
+    
+def point_y(a_point):
+    """Returns the ycoordinate of a point structure"""
+    return a_point[1]
+    
+def point_color(a_point):
+    """Returns the color of a point structure"""
+    return a_point[2]
+
+
+###############################################################################
+###############################################################################
+def delta_point(a_block, delta_x, delta_y):
+    """input<- a block(constituent of a tetrominoe shape), integer, integer
+       output->a block
+       function which takes a block and increments its POINT"""
+    point = get_point(a_block)
+    return (make_block(make_point(point_x(point)+delta_x,
+                                  point_y(point)+delta_y, point_color(point)),
+                       block_width(a_block), block_height(a_block)))
+
+
+###############################################################################
+## game controller
+###############################################################################
+def tetris():
+    """Sets up the whole game play and handles event handling"""
+    mov_delay = 150
+    events = {276: 'left', 275: 'right', 112: 'pause'}
+    
+    while True:
+        move_dir = 'down' #default move direction
+        game = 'playing'  #default game state play:- is game paused or playing?
         
-        # return the score, calculated by the number of rows deleted.        
-        return (100 * rows_deleted) * rows_deleted
-                
-    def output( self ):
-        for y in xrange(self.max_y):
-            line = []
-            for x in xrange(self.max_x):
-                if self.landed.get((x,y), None):
-                    line.append("X")
+        tet_shape = random_shape()
+        
+        if legal(tet_shape):
+            draw_shape(tet_shape)
+        else:
+            break  #game over
+
+        dets = find_column(get_tetname(tet_shape))
+        
+        sel_col = dets[0]
+        rotate_count = dets[-1]
+
+        mov_cnt = (sel_col - 80) / sqrsize
+
+        if mov_cnt < 0:
+            move_dir = 'left'
+        elif mov_cnt > 0:
+            move_dir = 'right'
+        elif mov_cnt == 0:
+            move_dir = 'down'
+
+        mov_cnt = abs(mov_cnt)
+
+        while rotate_count > 0:
+            new_tet_shape = rotate(tet_shape)
+            if legal(new_tet_shape):
+                prev_tet, tet_shape = tet_shape, new_tet_shape
+                draw_and_clear(tet_shape, prev_tet, mov_delay)
+            rotate_count = rotate_count - 1
+
+        while mov_cnt > 0:
+            new_tet_shape = move(tet_shape, move_dir)
+            if legal(new_tet_shape):
+                prev_tet, tet_shape = tet_shape, new_tet_shape
+                draw_and_clear(tet_shape, prev_tet, mov_delay)
+            mov_cnt = mov_cnt - 1
+
+
+        while True:
+            if game == 'paused':
+                for event in pygame.event.get((pygame.KEYDOWN, pygame.KEYUP)):
+                    if event.key == pygame.K_p:
+                        game, move_dir = 'playing', 'down'  
+            else:
+                for event in pygame.event.get((pygame.KEYDOWN, pygame.KEYUP)):
+                    if event.type == pygame.KEYDOWN:
+                        if event.key == pygame.K_p:
+                            game, move_dir = 'paused', 'pause'
+                            break
+
+                    elif event.type == pygame.KEYUP:
+                        mov_delay, move_dir = mov_delay, 'down'
+
+
+                move_dir = 'down'
+                new_tet_shape = move(tet_shape, move_dir)
+                if legal(new_tet_shape):
+                    prev_tet, tet_shape = tet_shape, new_tet_shape
+                    draw_and_clear(tet_shape, prev_tet, mov_delay) 
                 else:
-                    line.append(".")
-            print "".join(line)
-            
-    def add_block( self, (x, y), colour):
-        """
-        Create a block by drawing it on the canvas, return
-        it's ID to the caller.
-        """
-        rx = (x * self.scale) + self.offset
-        ry = (y * self.scale) + self.offset
-        
-        return self.canvas.create_rectangle(
-            rx, ry, rx+self.scale, ry+self.scale, fill=colour
-        )
-        
-    def move_block( self, id, coord):
-        """
-        Move the block, identified by 'id', by x and y. Note this is a
-        relative movement, e.g. move 10, 10 means move 10 pixels right and
-        10 pixels down NOT move to position 10,10. 
-        """
-        x, y = coord
-        self.canvas.move(id, x*self.scale, y*self.scale)
-        
-    def delete_block(self, id):
-        """
-        Delete the identified block
-        """
-        self.canvas.delete( id )
-        
-    def check_block( self, (x, y) ):
-        """
-        Check if the x, y coordinate can have a block placed there.
-        That is; if there is a 'landed' block there or it is outside the
-        board boundary, then return False, otherwise return true.
-        """
-        if x < 0 or x >= self.max_x or y < 0 or y >= self.max_y:
-            return False
-        elif self.landed.has_key( (x, y) ):
-            return False
-        else:
-            return True
+                    #If shape didn't move and direction of movement is down
+                    #then shape has come to rest so we can check for a full row
+                    #which we delete before exiting loop and generating a new
+                    #tetrominoe. if direction for movement is sideways
+                    #and   block did not move it should be moved down rather
+                    if move_dir == 'down':
+                        occupied_squares.extend(block_points(tet_shape))
+                        for row_no in range(height, -sqrsize, -sqrsize):
+                            while row_filled(row_no):
+                                delete_row(row_no)
+                                background.fill(color['white'])
+                                for point in occupied_squares:
+                                    draw_block(point)
+                        break
+                    else:
+                        draw_shape(tet_shape)
+                        pygame.time.delay(mov_delay)
 
-class Block(object):
-    def __init__( self, id, (x, y)):
-        self.id = id
-        self.x = x
-        self.y = y
-        
-    def coord( self ):
-        return (self.x, self.y)
-        
-class shape(object):
-    """
-    Shape is the  Base class for the game pieces e.g. square, T, S, Z, L,
-    reverse L and I. Shapes are constructed of blocks. 
-    """
-    @classmethod        
-    def check_and_create(cls, board, coords, colour ):
-        """
-        Check if the blocks that make the shape can be placed in empty coords
-        before creating and returning the shape instance. Otherwise, return
-        None.
-        """
-        for coord in coords:
-            if not board.check_block( coord ):
-                return None
-        
-        return cls( board, coords, colour)
-            
-    def __init__(self, board, coords, colour ):
-        """
-        Initialise the shape base.
-        """
-        self.board = board
-        self.blocks = []
-        
-        for coord in coords:
-            block = Block(self.board.add_block( coord, colour), coord)
-            
-            self.blocks.append( block )
-            
-    def move( self, direction ):
-        """
-        Move the blocks in the direction indicated by adding (dx, dy) to the
-        current block coordinates
-        """
-        d_x, d_y = direction_d[direction]
-        
-        for block in self.blocks:
 
-            x = block.x + d_x
-            y = block.y + d_y
-            
-            if not self.board.check_block( (x, y) ):
+###########################################################################
+###########################################################################                      
+def draw_and_clear(tetrominoe, prev_tet, delay):
+    """input<-two tetrominoe shapes
+       clear the previously drawn tetrominoe first and then draw a new
+       tetrominoe"""
+    for point in block_points(prev_tet):
+        background.fill((color['white']), (point_x(point), point_y(point),
+                                           sqrsize, sqrsize))
+        screen.blit(background, top_of_screen)
+        pygame.display.update()
+    draw_shape(tetrominoe)
+    pygame.time.delay(delay)
+    
+    
+############################################################################
+############################################################################
+def draw_shape(tetrominoe):
+    """input<-tetriminoe shape
+       This draws a tetrominoe shape to game board"""
+    for point in block_points(tetrominoe):
+        draw_block(point)
+    screen.blit(background, top_of_screen)
+    pygame.display.update()
+    
+ 
+#############################################################################
+#############################################################################
+def draw_block(a_point):
+    """draws a basic shape to screen"""
+    pygame.draw.rect(background, point_color(a_point), (point_x(a_point),
+                     point_y(a_point), sqrsize, sqrsize), 1)
+    
+    
+############################################################################
+############################################################################
+def row_filled(row_no, board=None):
+    """input<-tetriminoe shape
+       checks if a row on game board is fully occupied by a shape block"""
+    if board:
+        filled_coords = [(point_x(point), point_y(point)) for point in board]
+        for col in range(0, width, sqrsize):
+            if (col, row_no) in filled_coords:
+                continue
+            else:
                 return False
-            
-        for block in self.blocks:
-            
-            x = block.x + d_x
-            y = block.y + d_y
-            
-            self.board.move_block( block.id, (d_x, d_y) )
-            
-            block.x = x
-            block.y = y
+        return True 
+
+    else:
+        filled_coords = [[point_x(pt), point_y(pt)] for pt in occupied_squares]
+        for col in range(0, width, sqrsize):
+            if [col, row_no] in filled_coords:
+                continue
+            else:
+                return False
+        return True 
+
+
+##############################################################################
+##############################################################################
+def delete_row(row_no):
+    """input<-integer(a row number)
+       output->list of points
+       removes all squares on a row from the occupied_squares list and then
+       moves all square positions which have y-axis coord less than row_no down
+       board"""
+    global occupied_squares
+    occupied_squares = [point for point in occupied_squares
+                        if point_y(point) != row_no]
+    for index in range(len(occupied_squares)):
+        if point_y(occupied_squares[index]) < row_no:
+            occupied_squares[index] = make_point(point_x(occupied_squares[index]),
+                                    point_y(occupied_squares[index]) + sqrsize,
+                                    point_color(occupied_squares[index]))
         
-        return True
-            
-    def rotate(self, clockwise = True):
-        """
-        Rotate the blocks around the 'middle' block, 90-degrees. The
-        middle block is always the index 0 block in the list of blocks
-        that make up a shape.
-        """
-        # TO DO: Refactor for DRY
-        middle = self.blocks[0]
-        rel = []
-        for block in self.blocks:
-            rel.append( (block.x-middle.x, block.y-middle.y ) )
-            
-        # to rotate 90-degrees (x,y) = (-y, x)
-        # First check that the there are no collisions or out of bounds moves.
-        for idx in xrange(len(self.blocks)):
-            rel_x, rel_y = rel[idx]
-            if clockwise:
-                x = middle.x+rel_y
-                y = middle.y-rel_x
-            else:
-                x = middle.x-rel_y
-                y = middle.y+rel_x
-            
-            if not self.board.check_block( (x, y) ):
-                return False
-            
-        for idx in xrange(len(self.blocks)):
-            rel_x, rel_y = rel[idx]
-            if clockwise:
-                x = middle.x+rel_y
-                y = middle.y-rel_x
-            else:
-                x = middle.x-rel_y
-                y = middle.y+rel_x
-            
-            
-            diff_x = x - self.blocks[idx].x 
-            diff_y = y - self.blocks[idx].y 
-            
-            self.board.move_block( self.blocks[idx].id, (diff_x, diff_y) )
-            
-            self.blocks[idx].x = x
-            self.blocks[idx].y = y
+        
+##############################################################################
+##############################################################################
+def legal(tet_shape):
+    """input<-tetrominoe piece
+       output->bool
+       checks that a tetromone is in a legal portion of the board"""
+    tet_block_points = block_points(tet_shape)
+    filled_coords = [(point_x(pt), point_y(pt)) for pt in occupied_squares]
+    for point in tet_block_points:
+        new_x, new_y = point_x(point), point_y(point)
+        if ((new_x, new_y) in filled_coords or (new_y >= height or
+                                        (new_x >= width or new_x < top_x))):
+            return False
+    return True
+
+
+##############################################################################
+##############################################################################
+def move(shape, direction, undo=False):
+    """input<- a tetrominoe shape
+       output<- a terominoe shape
+       function moves a tetrominoe shape by moving all constituent blocks
+       by a fixed amount in a direction given by 'direction' argument"""
+    no_move = 0
+    directions = {'down':(no_move, sqrsize), 'left':(-sqrsize, no_move),
+        'right':(sqrsize, no_move), 'pause': (no_move, no_move)}
+    delta_x, delta_y = directions[direction]
+    if undo:
+        delta_x, delta_y = -delta_x, -delta_y
+    new_blocks = [delta_point (block, delta_x, delta_y)
+                  for block in get_blocks(shape)]
+    return (make_tetrominoe(new_blocks[0], new_blocks[1],
+                            new_blocks[2], new_blocks[3], get_tetname(shape)))
        
-        return True
-    
-class shape_limited_rotate( shape ):
-    """
-    This is a base class for the shapes like the S, Z and I that don't fully
-    rotate (which would result in the shape moving *up* one block on a 180).
-    Instead they toggle between 90 degrees clockwise and then back 90 degrees
-    anti-clockwise.
-    """
-    def __init__( self, board, coords, colour ):
-        self.clockwise = True
-        super(shape_limited_rotate, self).__init__(board, coords, colour)
-    
-    def rotate(self, clockwise=True):
-        """
-        Clockwise, is used to indicate if the shape should rotate clockwise
-        or back again anti-clockwise. It is toggled.
-        """
-        super(shape_limited_rotate, self).rotate(clockwise=self.clockwise)
-        if self.clockwise:
-            self.clockwise=False
-        else:
-            self.clockwise=True
+       
+##############################################################################
+##############################################################################
+def tetrominoe_shape(shape, start_x=80, start_y=0):
+    """function returns a random tetrominoe piece"""
+    shapes = {'S': make_tetrominoe(make_block(make_point(start_x + 1*sqrsize,
+                                                         start_y + 2*sqrsize,
+                                                         (0, 0, 0)),
+                                             sqrsize, sqrsize),
+                                  make_block(make_point(start_x, start_y,
+                                                        (0, 0, 0)),
+                                             sqrsize, sqrsize),
+                                  make_block(make_point(start_x,
+                                                        start_y + 1*sqrsize,
+                                                        (0, 0, 0)),
+                                             sqrsize, sqrsize),
+                                  make_block(make_point(start_x + 1*sqrsize,
+                                                    start_y + 1*sqrsize,
+                                                    (0, 0, 0)),
+                                             sqrsize, sqrsize)
+                                  , 'S'),
         
-
-class square_shape( shape ):
-    @classmethod
-    def check_and_create( cls, board ):
-        coords = [(4,0),(5,0),(4,1),(5,1)]
-        return super(square_shape, cls).check_and_create(board, coords, "red")
-        
-    def rotate(self, clockwise=True):
-        """
-        Override the rotate method for the square shape to do exactly nothing!
-        """
-        pass
-        
-class t_shape( shape ):
-    @classmethod
-    def check_and_create( cls, board ):
-        coords = [(4,0),(3,0),(5,0),(4,1)]
-        return super(t_shape, cls).check_and_create(board, coords, "yellow" )
-        
-class l_shape( shape ):
-    @classmethod
-    def check_and_create( cls, board ):
-        coords = [(4,0),(3,0),(5,0),(3,1)]
-        return super(l_shape, cls).check_and_create(board, coords, "orange")
-    
-class reverse_l_shape( shape ):
-    @classmethod
-    def check_and_create( cls, board ):
-        coords = [(5,0),(4,0),(6,0),(6,1)]
-        return super(reverse_l_shape, cls).check_and_create(
-            board, coords, "green")
-        
-class z_shape( shape_limited_rotate ):
-    @classmethod
-    def check_and_create( cls, board ):
-        coords =[(5,0),(4,0),(5,1),(6,1)]
-        return super(z_shape, cls).check_and_create(board, coords, "purple")
-        
-class s_shape( shape_limited_rotate ):
-    @classmethod
-    def check_and_create( cls, board ):
-        coords =[(5,1),(4,1),(5,0),(6,0)]
-        return super(s_shape, cls).check_and_create(board, coords, "magenta")
-        
-class i_shape( shape_limited_rotate ):
-    @classmethod
-    def check_and_create( cls, board ):
-        coords =[(4,0),(3,0),(5,0),(6,0)]
-        return super(i_shape, cls).check_and_create(board, coords, "blue")
-        
-class game_controller(object):
-    """
-    Main game loop and receives GUI callback events for keypresses etc...
-    """
-    def __init__(self, parent):
-        """
-        Intialise the game...
-        """
-        self.parent = parent
-        self.score = 0
-        self.level = 0
-        self.delay = 1000    #ms
-        
-        #lookup table
-        self.shapes = [square_shape,
-                      t_shape,
-                      l_shape,
-                      reverse_l_shape,
-                      z_shape,
-                      s_shape,
-                      i_shape ]
-        
-        self.thresholds = level_thresholds( 500, NO_OF_LEVELS )
-        
-        self.status_bar = status_bar( parent )
-        self.status_bar.pack(side=TOP,fill=X)
-        #print "Status bar width",self.status_bar.cget("width")
-
-        self.status_bar.set("Score: %-7d\t Level: %d " % (
-            self.score, self.level+1)
-        )
-        
-        self.board = Board(
-            parent,
-            scale=SCALE,
-            max_x=MAXX,
-            max_y=MAXY,
-            offset=OFFSET
-            )
-        
-        self.board.pack(side=BOTTOM)
-        
-        self.parent.bind("<Left>", self.left_callback)
-        self.parent.bind("<Right>", self.right_callback)
-        self.parent.bind("<Up>", self.up_callback)
-        self.parent.bind("<Down>", self.down_callback)
-        self.parent.bind("a", self.a_callback)
-        self.parent.bind("s", self.s_callback)
-        self.parent.bind("p", self.p_callback)
-        
-        self.shape = self.get_next_shape()
-        #self.board.output()
-
-        self.after_id = self.parent.after( self.delay, self.move_my_shape )
-        
-    def handle_move(self, direction):
-        #if you can't move then you've hit something
-        if not self.shape.move( direction ):
-            
-            # if your heading down then the shape has 'landed'
-            if direction == DOWN:
-                self.score += self.board.check_for_complete_row(
-                    self.shape.blocks
-                    )
-                del self.shape
-                self.shape = self.get_next_shape()
+        'O': make_tetrominoe(make_block(make_point(start_x + 1*sqrsize,
+                                                  start_y + 1*sqrsize,
+                                                (200, 200, 200)),
+                                        sqrsize, sqrsize),
+                            make_block(make_point(start_x, start_y,
+                                                  (200, 200, 200)),
+                                       sqrsize, sqrsize),
+                            make_block(make_point(start_x, start_y + 1*sqrsize,
+                                                  (200, 200, 200)),
+                                       sqrsize, sqrsize),
+                            make_block(make_point(start_x + 1*sqrsize, start_y,
+                                                  (200, 200, 200)),
+                                       sqrsize, sqrsize),
+                            'O'),
                 
-                # If the shape returned is None, then this indicates that
-                # that the check before creating it failed and the
-                # game is over!
-                if self.shape is None:
-                    tkMessageBox.showwarning(
-                        title="GAME OVER",
-                        message ="Score: %7d\tLevel: %d\t" % (
-                            self.score, self.level),
-                        parent=self.parent
-                        )
-                    Toplevel().destroy()
-                    self.parent.destroy()
-                    sys.exit(0)
+        'I': make_tetrominoe(make_block(make_point(start_x, start_y + 3*sqrsize,
+                                                   (0, 255, 0)),
+                                       sqrsize, sqrsize),
+                            make_block(make_point(start_x, start_y,
+                                                  (0, 255, 0)),
+                                       sqrsize, sqrsize),
+                            make_block(make_point(start_x, start_y + 2*sqrsize,
+                                                  (0, 255, 0)),
+                                       sqrsize, sqrsize),
+                            make_block(make_point(start_x, start_y + 1*sqrsize,
+                                                  (0, 255, 0)),
+                                       sqrsize, sqrsize),
+                            'I'),
                 
-                # do we go up a level?
-                if (self.level < NO_OF_LEVELS and 
-                    self.score >= self.thresholds[ self.level]):
-                    self.level+=1
-                    self.delay-=100
-                    
-                self.status_bar.set("Score: %-7d\t Level: %d " % (
-                    self.score, self.level+1)
-                )
+        'L':make_tetrominoe(make_block(make_point(start_x + 1*sqrsize,
+                                                  start_y + 2*sqrsize,
+                                                  (0, 0, 255)),
+                                       sqrsize, sqrsize),
+                            make_block(make_point(start_x, start_y,
+                                                  (0, 0, 255)),
+                                        sqrsize, sqrsize),
+                            make_block(make_point(start_x, start_y + 2*sqrsize,
+                                                  (0, 0, 255)),
+                                       sqrsize, sqrsize),
+                            make_block(make_point(start_x, start_y + 1*sqrsize,
+                                                  (0, 0, 255)),
+                                       sqrsize, sqrsize), 'L'),
                 
-                # Signal that the shape has 'landed'
-                return False
-        return True
+        'T':make_tetrominoe(make_block(make_point(start_x + 1*sqrsize,
+                                                  start_y + 1*sqrsize,
+                                                  (255, 0, 0)),
+                                       sqrsize, sqrsize),
+                            make_block(make_point(start_x, start_y,
+                                                  (255, 0, 0)),
+                                       sqrsize, sqrsize),
+                            make_block(make_point(start_x - 1*sqrsize,
+                                                  start_y + 1*sqrsize,
+                                                  (255, 0, 0)),
+                                        sqrsize, sqrsize),
+                            make_block(make_point(start_x,
+                                                        start_y + 1*sqrsize,
+                                                        (255, 0, 0)),
+                                        sqrsize, sqrsize), 'T')
+        }
+    return shapes[shape]
 
-    def left_callback( self, event ):
-        if self.shape:
-            self.handle_move( LEFT )
-        
-    def right_callback( self, event ):
-        if self.shape:
-            self.handle_move( RIGHT )
 
-    def up_callback( self, event ):
-        if self.shape:
-            # drop the tetrominoe to the bottom
-            while self.handle_move( DOWN ):
-                pass
+#####
+#####
+def random_shape(start_x=80, start_y=0):
+    """return a random tetrominoe shape"""
+    tets = ['S', 'O', 'I', 'L', 'T']
+    return tetrominoe_shape(tets[random.randint(0, 4)], start_x, start_y)
 
-    def down_callback( self, event ):
-        if self.shape:
-            self.handle_move( DOWN )
-            
-    def a_callback( self, event):
-        if self.shape:
-            self.shape.rotate(clockwise=True)
-            
-    def s_callback( self, event):
-        if self.shape:
-            self.shape.rotate(clockwise=False)
-        
-    def p_callback(self, event):
-        self.parent.after_cancel( self.after_id )
-        tkMessageBox.askquestion(
-            title = "Paused!",
-            message="Continue?",
-            type=tkMessageBox.OK)
-        self.after_id = self.parent.after( self.delay, self.move_my_shape )
     
-    def move_my_shape( self ):
-        if self.shape:
-            self.handle_move( DOWN )
-            self.after_id = self.parent.after( self.delay, self.move_my_shape )
+##############################################################################
+##############################################################################
+def rotate(tetrominoe):
+    """input<- tetrominoe shape
+       ouput-> tetrominoe shape
+       rotates a tetrominoe shape if possible about a reference block."""
+    #global occupied_squares
+    if get_tetname(tetrominoe) == 'O':
+        return tetrominoe
+    else:
+        ref_point = get_point(get_refblock(tetrominoe)) 
+        x_coord = point_x(ref_point)
+        y_coord = point_y(ref_point)
         
-    def get_next_shape( self ):
-        """
-        Randomly select which tetrominoe will be used next.
-        """
-        the_shape = self.shapes[ randint(0,len(self.shapes)-1) ]
-        return the_shape.check_and_create(self.board)
+        tetblock_coords = block_points(tetrominoe) 
         
-        
-if __name__ == "__main__":
-    root = Tk()
-    root.title("Tetris Tk")
-    theGame = game_controller( root )
+        new_tet = make_tetrominoe(make_block(make_point(x_coord +
+                                            y_coord-point_y(tetblock_coords[0]),
+                            y_coord - (x_coord - point_x(tetblock_coords[0])),
+                            point_color(ref_point)), sqrsize, sqrsize,
+                                             ),
+                        
+                        make_block(make_point(x_coord + y_coord -
+                                              point_y(tetblock_coords[1]),
+                            y_coord - (x_coord - point_x(tetblock_coords[1])),
+                            point_color(ref_point)), sqrsize, sqrsize),
+                        
+                        make_block(make_point(x_coord + y_coord -
+                                              point_y(tetblock_coords[2]),
+                            y_coord - (x_coord - point_x(tetblock_coords[2])),
+                            point_color(ref_point)), sqrsize, sqrsize),
+                        
+                        make_block(make_point(x_coord, y_coord,
+                                              point_color(ref_point)),
+                                   sqrsize, sqrsize),
+                    get_tetname(tetrominoe))
     
-    root.mainloop()
+        #if legal(new_tet):
+        return new_tet
+        #else:
+         #   return tetrominoe
+####
+####
+def drop_shape(shape):
+    """drop a shape into postion on a column"""
+    new_shape = move(shape, 'down')
+    prev_shape, new_shape = shape, new_shape
+    while legal(new_shape):
+        prev_shape, new_shape = new_shape, move(new_shape, 'down')
+    return prev_shape
+
+
+####
+####
+def bubble_count(shape):
+    """returns number of new empty spots generated when a shape is placed at a 
+    legal point"""
+    count = 0
+    points = [(point_x(pt), point_y(pt)) for pt in block_points(shape)]
+    board = [(point_x(pt), point_y(pt)) for pt in occupied_squares]
+    for pt in points:
+        for i in range(point_y(pt) + sqrsize, height, sqrsize):
+            if (pt[0], i) in board or (pt[0], i) in points:
+                break
+            else:
+                count += 1
+    return count
+
+####
+###
+def shape_lowest_row(shape):
+    """return the lowest row of a shape"""
+    points = [(point_x(pt), point_y(pt)) for pt in block_points(shape)]
+    points = sorted(points, key=lambda point: point[1], reverse=True)
+    return points[0]
+
+#####
+#####
+def row_filln_column(shape):
+    """return a list of columns, rows filled tuple for each column on the 
+    board if there are n columns for which a shape dropped in column fills
+    a row"""
+    rows_filled = []
+    shape_rotates = {'S':2, 'I':1, 'O':0, 'L':3, 'T':3}
+    rotate_count = shape_rotates[shape]
+    curr_cnt = 0
+    while True:
+        for col in range(0, width, sqrsize):
+            board = copy.deepcopy(occupied_squares)
+            tet_shape = tetrominoe_shape(shape, start_x=col, start_y=0)
+            cnt = curr_cnt
+            while cnt > 0:
+                tet_shape = rotate(tet_shape)
+                cnt -= 1
+
+            if not legal(tet_shape): # check shape is in board sideways
+                continue
+            tet_shape = drop_shape(tet_shape)
+            board.extend(block_points(tet_shape))
+            rows = 0
+            for row in range(height, 0, -sqrsize):
+                if row_filled(row, board=board):
+                    rows += 1
+            if rows > 0:
+                rows_filled.append((col, rows, curr_cnt))
+            tet_shape = rotate(tet_shape)
+
+        if rotate_count == curr_cnt:
+            break
+        curr_cnt += 1
+    if rows_filled:
+        return rows_filled
+    return None
+
+####
+####
+def next_best_columns(shape):
+    """return list of columns which a shape can go into if the shape cannot
+    fill any rows"""
+    next_best = []
+    shape_rotates = {'S':2, 'I':1, 'O':0, 'L':3, 'T':3}
+    rotate_count = shape_rotates[shape]
+    curr_cnt = 0
+    while True:
+        for col in range(0, width, sqrsize):
+            board = copy.deepcopy(occupied_squares)
+            tet_shape = tetrominoe_shape(shape, start_x=col, start_y=0)
+            cnt = curr_cnt
+            while cnt > 0:
+                tet_shape = rotate(tet_shape)
+                cnt -= 1
+
+            if not legal(tet_shape):
+                continue
+            tet_shape = drop_shape(tet_shape)
+            board.extend(block_points(tet_shape))
+            bubble_cnt = bubble_count(tet_shape)
+            next_best.append((col, bubble_cnt, shape_lowest_row(tet_shape)[1],
+                             curr_cnt))
+            #print col, bubble_cnt
+        if rotate_count == curr_cnt:
+            break
+        curr_cnt += 1
+    return next_best
+
+#####
+#####
+def find_column(shape):
+    """find column of best fit to drop down a tetrominoe shape from"""
+    # search for if any rows can be filled up by shape
+    rows_filled = row_filln_column(shape)
+    if not rows_filled:
+        next_best = next_best_columns(shape)
+        next_best =  sorted(next_best, key=lambda col: col[2], reverse=True)
+        cols = sorted(next_best, key=lambda col: col[1])
+        return cols[0]
+    rows_filled = sorted(rows_filled, key=lambda row_filled: row_filled[1])
+    return rows_filled[-1] #col with most rows filled
+
+
+if __name__ == '__main__':
+    tetris()
+   
+
+
+
